@@ -82,7 +82,6 @@ int main()
     {
         crs_ptrs[i] += crs_ptrs[i - 1];
     }
-    printf("This number should be equal to the number of nonzeros %d\n", crs_ptrs[NumRows]);
     for (int i = 0; i < NumElements; i++)
     {
         int rowid = X[i].i;
@@ -99,21 +98,69 @@ int main()
         crs_ptrs[i] = crs_ptrs[i - 1];
     }
     crs_ptrs[0] = 0;
-    printf("CRS Pointers:\n");
-    for (int i = 0; i <= NumElements; i++)
+    printf("CRS Pointers: ");
+    for (int i = 0; i < NumRows; i++)
     {
         printf("%d ", crs_ptrs[i]);
     }
-
-    printf("CRS Colids:\n");
-    for (int i = 0; i <= NumElements; i++)
+    printf("\n");
+    printf("CRS Colids: ");
+    for (int i = 0; i < NumElements; i++)
     {
         printf("%d ", crs_colids[i]);
     }
-    printf("CRS Values:\n");
-    for (int i = 0; i <= NumElements; i++)
+    printf("\n");
+    printf("CRS Values: ");
+    for (int i = 0; i < NumElements; i++)
     {
         printf("%lf ", crs_values[i]);
     }
-    return 0;
+    printf("\n");
+    int nzeros = 0;
+    double *X = (double *)malloc((NumRows) * sizeof(double));
+    for (size_t i = 0; i < NumRows; i++)
+    {
+        int sum = 0;
+        for (size_t j = crs_ptrs[i]; j < crs_ptrs[i + 1]; j++)
+        {
+            sum += crs_values[j];
+        }
+        X[i] = crs_values[crs_ptrs[i + 1] - 1] - (sum / 2);
+        if (X[i] == 0)
+            nzeros += 1;
+    }
+
+    printf("Nzeros: %d\n", nzeros);
+    double p;
+    if (nzeros > 0)
+    {
+        p = 1.0;
+        for (size_t i = 0; i < NumRows; i++)
+        {
+            p *= X[i];
+        }
+    }
+    else
+    {
+        p = 0.0;
+    }
+    for (long long int i = 1; i < (1 << (NumRows - 1)); i++)
+    {
+        int y = (i >> 1) ^ i;                 // gray-code order
+        int yPrev = ((i - 1) >> 1) ^ (i - 1); // i-1's gray-code order
+        int s = (int)__builtin_ctz(y ^ yPrev) + 1;
+
+        // int prodsign = (i & 1) == 0 ? 1 : -1;   // get the prodsign
+        // double dd = 1.0;
+
+        // #pragma omp simd reduction(* : dd)
+        //         for (int j = 0; j < N; j++)
+        //         {
+        //             x_specul[j] += (double)(s * MT[z][j]);
+        //             dd *= x_specul[j];
+        //         }
+        //         p += (double)(prodsign * dd);
+        //     }
+        return 0;
+    }
 }
