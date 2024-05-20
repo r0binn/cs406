@@ -1,8 +1,11 @@
+#include <cmath>
 #include <fstream>
 #include <iostream>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 using namespace std;
 typedef struct sparseMatrix
 {
@@ -10,7 +13,6 @@ typedef struct sparseMatrix
     int j;
     double val;
 } sparseMatrix;
-
 sparseMatrix *X;
 int N;
 int m;
@@ -126,15 +128,15 @@ double seqSpaRyserNzero(int *rptrs, int *columns, double *rvals, int *cptrs, int
     {
         p = 0.0;
     }
-
-    for (int g = 1; g < (1 << (N - 1)); g++)
+    unsigned long int maxG = (1 << (N - 1));
+    for (int g = 1; g < maxG; g++)
     {
 
-        int y = (g >> 1) ^ g;                   // gray-code order
-        int yy = ((g - 1) >> 1) ^ (g - 1);      // i-1's gray-code order
-        int j = __builtin_ctz(y ^ yy);          // get the changing bit
-        int s = ((y >> (j)) & 1) == 1 ? 1 : -1; // find changing bit
-        int prodsign = (g & 1) == 0 ? 1 : -1;   // get the prodsign
+        int grayNow = (g >> 1) ^ g;
+        int grayPrev = ((g - 1) >> 1) ^ (g - 1);
+        int j = __builtin_ctz(grayNow ^ grayPrev);
+        int s = ((grayNow >> (j)) & 1) == 1 ? 1 : -1;
+        int sign = (g & 1) == 0 ? 1 : -1;
 
         for (int ptr = cptrs[j]; ptr < cptrs[j + 1]; ptr++)
         {
@@ -157,7 +159,7 @@ double seqSpaRyserNzero(int *rptrs, int *columns, double *rvals, int *cptrs, int
             {
                 prod *= X[i];
             }
-            p += (double)(prodsign * prod);
+            p += (double)(sign * prod);
         }
     }
     free(X);
@@ -187,14 +189,16 @@ double seqSpaRyser(int *rptrs, int *columns, double *rvals, int *cptrs, int *row
     {
         p *= X[i];
     }
-    for (int g = 1; g < (1 << (N - 1)); g++)
+    unsigned long int maxG = (1 << (N - 1));
+
+    for (int g = 1; g < maxG; g++)
     {
 
-        int y = (g >> 1) ^ g;                   // gray-code order
-        int yy = ((g - 1) >> 1) ^ (g - 1);      // i-1's gray-code order
-        int j = __builtin_ctz(y ^ yy);          // get the changing bit
-        int s = ((y >> (j)) & 1) == 1 ? 1 : -1; // find changing bit
-        int prodsign = (g & 1) == 0 ? 1 : -1;   // get the prodsign
+        int grayNow = (g >> 1) ^ g;
+        int grayPrev = ((g - 1) >> 1) ^ (g - 1);
+        int j = __builtin_ctz(grayNow ^ grayPrev);
+        int s = ((grayNow >> (j)) & 1) == 1 ? 1 : -1;
+        int sign = (g & 1) == 0 ? 1 : -1;
 
         for (int ptr = cptrs[j]; ptr < cptrs[j + 1]; ptr++)
         {
@@ -208,12 +212,13 @@ double seqSpaRyser(int *rptrs, int *columns, double *rvals, int *cptrs, int *row
         {
             prod *= X[i];
         }
-        p += (double)(prodsign * prod);
+        p += (double)(sign * prod);
     }
     free(X);
     return p * (4 * (N % 2) - 2);
 }
-int main()
+
+int main(int argc, char *argv[])
 {
     char fileName[80] = "out3.txt";
     int n; // Size of square matrix
@@ -221,7 +226,7 @@ int main()
     int *rowPtr = nullptr;
     int *colIdx = nullptr;
     double *values = nullptr;
-
+    int numThreads = atoi(argv[1]);
     m = loadDataSparse(fileName, &X, &N);
     int *rptrs = (int *)malloc((N + 1) * sizeof(int));
     int *columns = (int *)malloc(m * sizeof(int));
@@ -259,7 +264,7 @@ int main()
     rptrs[0] = 0;
     if (rptrs[N - 1] == m)
     {
-        printf("The result is : %lf\n", 0);
+        printf("The result is : %d\n", 0);
         exit(0);
     }
 
@@ -267,15 +272,119 @@ int main()
     {
         if (rptrs[i - 1] >= rptrs[i])
         {
-            printf("The result is : %lf\n", 0);
+            printf("The result is : %d\n", 0);
             exit(0);
         }
     }
+    unsigned long int maxG = (1 << (N - 1));
     int *cptrs;
     int *rows;
     double *cvals;
     convertCRStoCCS(rptrs, columns, rvals, N, m, &cptrs, &rows, &cvals);
+    double startS = omp_get_wtime();
     double trueResult = seqSpaRyserNzero(rptrs, columns, rvals, cptrs, rows, cvals);
-    printf("The result is : %lf \n", trueResult);
+    double endS = omp_get_wtime();
+    printf("Sequential result is : %.40f seconds %lf\n", trueResult, endS - startS);
+    omp_set_num_threads(numThreads);
+    unsigned int chunksize = (1 << (N - 1));
+    chunksize = floor((chunksize - 1) / numThreads);
+    chunksize = (chunksize > 1) ? chunksize : 1;
+    printf("ChunkSize: %u\n", chunksize);
+
+    printf("GMax: %lu\n", maxG);
+    double *X = (double *)malloc((N) * sizeof(double));
+    for (size_t i = 0; i < N; i++)
+    {
+        double sum = 0;
+        for (size_t ptr = rptrs[i]; ptr < rptrs[i + 1]; ptr++)
+        {
+            sum += rvals[ptr];
+        }
+        if (columns[rptrs[i + 1] - 1] == N - 1)
+        {
+            X[i] = rvals[rptrs[i + 1] - 1] - (sum / 2);
+        }
+        else
+        {
+            X[i] = 0 - (sum / 2);
+        }
+    }
+    double p = 1.0;
+    for (size_t i = 0; i < N; i++)
+    {
+        p *= X[i];
+    }
+    double tempResult;
+    printf("Parallel has started\n");
+    double startT = omp_get_wtime();
+#pragma omp parallel for schedule(dynamic, chunksize) reduction(+ : p) proc_bind(spread)
+    for (unsigned long int g = 1; g < maxG; g++)
+    {
+        int thread_id = omp_get_thread_num();
+        printf("TID %d g %lu\n", thread_id, g);
+
+        double *myX = (double *)malloc((N) * sizeof(double));
+        for (size_t i = 0; i < N; i++)
+        {
+            myX[i] = X[i];
+        }
+        int myStart = g;
+        int prevGray = (myStart - 1) ^ ((myStart - 1) >> 1);
+
+        double myP = 0;
+        int colIdx = 0;
+        if (g != 1)
+        {
+            while (prevGray != 0)
+            {
+                if (prevGray & 1 == 1)
+                {
+                    for (int ptr = cptrs[colIdx]; ptr < cptrs[colIdx + 1]; ptr++)
+                    {
+                        int row = rows[ptr];
+                        double val = cvals[ptr];
+                        myX[row] = myX[row] + val;
+                    }
+                }
+                prevGray = prevGray >> 1;
+                colIdx += 1;
+            }
+        }
+        unsigned long long int myEnd = g + chunksize;
+        myEnd = (myEnd < maxG) ? myEnd : maxG;
+        for (; g < myEnd; g++)
+        {
+
+            int grayNow = (g >> 1) ^ g;
+            int grayPrev = ((g - 1) >> 1) ^ (g - 1);
+            int j = __builtin_ctz(grayNow ^ grayPrev);
+            int s = ((grayNow >> (j)) & 1) == 1 ? 1 : -1;
+            int prodsign = (g & 1) == 0 ? 1 : -1;
+
+            for (int ptr = cptrs[j]; ptr < cptrs[j + 1]; ptr++)
+            {
+                int row = rows[ptr];
+                double val = cvals[ptr];
+                myX[row] = myX[row] + (s * val);
+            }
+            double prod = 1.0;
+            for (size_t i = 0; i < N; i++)
+            {
+                prod *= myX[i];
+            }
+            myP += (double)(prodsign * prod);
+        }
+        printf("TID %d gEnd %lu\n", thread_id, g);
+        g = maxG;
+        free(myX);
+        p += myP;
+    }
+
+    tempResult = p * (4 * (N % 2) - 2);
+    double endT = omp_get_wtime();
+    printf("parallel ends in %f seconds with %d threads ", endT - startT, numThreads);
+    printf("The given result is : %.40f\n", tempResult);
+    printf("Error :%lf\n", abs(trueResult - tempResult) / trueResult);
+    printf("Speedup :%lf\n", (endS - startS) / (endT - startT));
     return 0;
 }
