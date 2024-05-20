@@ -12,8 +12,8 @@ typedef struct sparseMatrix
 } sparseMatrix;
 
 sparseMatrix *X;
-int NumCols, NumRows;
-int NumElements;
+int N;
+int m;
 void convertCRStoCCS(int *rptrs, int *columns, double *rvals, int NumRows, int NumElements, int **cptrs, int **rows,
                      double **cvals)
 {
@@ -67,9 +67,6 @@ int loadDataSparse(char *fileName, sparseMatrix **data, int *size1)
         printf("error while reading file %d\n", result);
         exit(1);
     }
-
-    printf("The number of rows, columns, and nonzeros are %d, and %d respectively\n", s1, numel);
-
     *data = (sparseMatrix *)malloc(numel * sizeof(sparseMatrix));
     for (int i = 0; i < numel; i++)
     {
@@ -91,104 +88,18 @@ int loadDataSparse(char *fileName, sparseMatrix **data, int *size1)
     *size1 = s1;
     return numel;
 }
-
-int main()
+double seqSpaRyserNzero(int *rptrs, int *columns, double *rvals, int *cptrs, int *rows, double *cvals)
 {
-    char fileName[80] = "out3.txt";
-    int n; // Size of square matrix
-    int m; // Number of non-zero items
-    int *rowPtr = nullptr;
-    int *colIdx = nullptr;
-    double *values = nullptr;
-
-    NumElements = loadDataSparse(fileName, &X, &NumRows);
-    int *rptrs = (int *)malloc((NumRows + 1) * sizeof(int));
-    int *columns = (int *)malloc(NumElements * sizeof(int));
-    double *rvals = (double *)malloc(NumElements * sizeof(double));
-    memset(rptrs, 0, (NumRows + 1) * sizeof(int));
-    for (int i = 0; i < NumElements; i++)
-    {
-        int rowid = X[i].i;
-        if (rowid < 0 || rowid >= NumRows)
-        {
-            printf("problem in X, quitting - %d\n", rowid);
-            exit(1);
-        }
-        rptrs[rowid + 1]++;
-    }
-    for (int i = 1; i <= NumRows; i++)
-    {
-        rptrs[i] += rptrs[i - 1];
-    }
-    for (int i = 0; i < NumElements; i++)
-    {
-        int rowid = X[i].i;
-        int index = rptrs[rowid];
-
-        columns[index] = X[i].j;
-        rvals[index] = X[i].val;
-
-        rptrs[rowid] = rptrs[rowid] + 1;
-    }
-
-    for (int i = NumRows; i > 0; i--)
-    {
-        rptrs[i] = rptrs[i - 1];
-    }
-    rptrs[0] = 0;
-
-    int *cptrs;
-    int *rows;
-    double *cvals;
-    convertCRStoCCS(rptrs, columns, rvals, NumRows, NumElements, &cptrs, &rows, &cvals);
-    printf("rptrs: ");
-    for (int i = 0; i < NumRows; i++)
-    {
-        printf("%d ", rptrs[i]);
-    }
-    printf("\n");
-    printf("columns: ");
-    for (int i = 0; i < NumElements; i++)
-    {
-        printf("%d ", columns[i]);
-    }
-    printf("\n");
-    printf("rvals: ");
-    for (int i = 0; i < NumElements; i++)
-    {
-        printf("%lf ", rvals[i]);
-    }
-    printf("\n");
-
-    printf("cptrs: ");
-    for (int i = 0; i < NumRows; i++)
-    {
-        printf("%d ", cptrs[i]);
-    }
-    printf("\n");
-    printf("rows: ");
-    for (int i = 0; i < NumElements; i++)
-    {
-        printf("%d ", rows[i]);
-    }
-    printf("\n");
-    printf("cvals: ");
-    for (int i = 0; i < NumElements; i++)
-    {
-        printf("%lf ", cvals[i]);
-    }
-    printf("\n");
-
     int nzeros = 0;
-    double *X = (double *)malloc((NumRows) * sizeof(double));
-    for (size_t i = 0; i < NumRows; i++)
+    double *X = (double *)malloc((N) * sizeof(double));
+    for (size_t i = 0; i < N; i++)
     {
         double sum = 0;
         for (size_t ptr = rptrs[i]; ptr < rptrs[i + 1]; ptr++)
         {
             sum += rvals[ptr];
         }
-        if (columns[rptrs[i + 1] - 1] == NumRows - 1)
+        if (columns[rptrs[i + 1] - 1] == N - 1)
         {
             X[i] = rvals[rptrs[i + 1] - 1] - (sum / 2);
         }
@@ -198,20 +109,15 @@ int main()
         }
 
         if (X[i] == 0)
+        {
             nzeros += 1;
+        }
     }
-    printf("X: ");
-    for (int i = 0; i < NumRows; i++)
-    {
-        printf("%lf ", X[i]);
-    }
-    printf("\n");
-    printf("Nzeros: %d\n", nzeros);
     double p;
-    if (nzeros > 0)
+    if (nzeros <= 0)
     {
         p = 1.0;
-        for (size_t i = 0; i < NumRows; i++)
+        for (size_t i = 0; i < N; i++)
         {
             p *= X[i];
         }
@@ -220,27 +126,16 @@ int main()
     {
         p = 0.0;
     }
-    printf("p: %lf\n", p);
-    int tmp = 1 << (NumRows - 1);
-    for (int g = 1; g < (1 << (NumRows - 1)); g++)
+
+    for (int g = 1; g < (1 << (N - 1)); g++)
     {
 
-        int y, yPrime, j, c, s;
-        double pr_Sign;
+        int y = (g >> 1) ^ g;                   // gray-code order
+        int yy = ((g - 1) >> 1) ^ (g - 1);      // i-1's gray-code order
+        int j = __builtin_ctz(y ^ yy);          // get the changing bit
+        int s = ((y >> (j)) & 1) == 1 ? 1 : -1; // find changing bit
+        int prodsign = (g & 1) == 0 ? 1 : -1;   // get the prodsign
 
-        y = ((g) >> 1) ^ (g);
-        yPrime = ((g - 1) >> 1) ^ (g - 1);
-        j = __builtin_ctz(y ^ yPrime);
-        int lastFiveBits = y & 0b11111;
-        printf("y     : %d%d%d%d%d\n", (lastFiveBits >> 4) & 1, (lastFiveBits >> 3) & 1, (lastFiveBits >> 2) & 1,
-               (lastFiveBits >> 1) & 1, lastFiveBits & 1);
-        lastFiveBits = yPrime & 0b11111;
-        printf("yPrime: %d%d%d%d%d\n", (lastFiveBits >> 4) & 1, (lastFiveBits >> 3) & 1, (lastFiveBits >> 2) & 1,
-               (lastFiveBits >> 1) & 1, lastFiveBits & 1);
-        pr_Sign = (g & 1) == 0 ? 1 : -1;
-        s = ((y >> (j)) & 1) == 1 ? 1 : -1;
-
-        printf("idx of the changed bit %d from 0 to 1 %d\n", j, s);
         for (int ptr = cptrs[j]; ptr < cptrs[j + 1]; ptr++)
         {
             int row = rows[ptr];
@@ -254,20 +149,133 @@ int main()
             {
                 nzeros += 1;
             }
-            printf("row:%d\n", row);
-            printf("col j:%d\n", j);
         }
         if (nzeros == 0)
         {
             double prod = 1.0;
-            for (size_t i = 0; i < NumRows; i++)
+            for (size_t i = 0; i < N; i++)
             {
                 prod *= X[i];
             }
-            p = p + (prod * pr_Sign);
+            p += (double)(prodsign * prod);
         }
     }
-    double result = p * (4 * (NumRows % 2) - 2);
-    printf("The result is : %lf\n", result);
+    free(X);
+    return p * (4 * (N % 2) - 2);
+}
+double seqSpaRyser(int *rptrs, int *columns, double *rvals, int *cptrs, int *rows, double *cvals)
+{
+    double *X = (double *)malloc((N) * sizeof(double));
+    for (size_t i = 0; i < N; i++)
+    {
+        double sum = 0;
+        for (size_t ptr = rptrs[i]; ptr < rptrs[i + 1]; ptr++)
+        {
+            sum += rvals[ptr];
+        }
+        if (columns[rptrs[i + 1] - 1] == N - 1)
+        {
+            X[i] = rvals[rptrs[i + 1] - 1] - (sum / 2);
+        }
+        else
+        {
+            X[i] = 0 - (sum / 2);
+        }
+    }
+    double p = 1.0;
+    for (size_t i = 0; i < N; i++)
+    {
+        p *= X[i];
+    }
+    for (int g = 1; g < (1 << (N - 1)); g++)
+    {
+
+        int y = (g >> 1) ^ g;                   // gray-code order
+        int yy = ((g - 1) >> 1) ^ (g - 1);      // i-1's gray-code order
+        int j = __builtin_ctz(y ^ yy);          // get the changing bit
+        int s = ((y >> (j)) & 1) == 1 ? 1 : -1; // find changing bit
+        int prodsign = (g & 1) == 0 ? 1 : -1;   // get the prodsign
+
+        for (int ptr = cptrs[j]; ptr < cptrs[j + 1]; ptr++)
+        {
+            int row = rows[ptr];
+            double val = cvals[ptr];
+            X[row] = X[row] + (s * val);
+        }
+
+        double prod = 1.0;
+        for (size_t i = 0; i < N; i++)
+        {
+            prod *= X[i];
+        }
+        p += (double)(prodsign * prod);
+    }
+    free(X);
+    return p * (4 * (N % 2) - 2);
+}
+int main()
+{
+    char fileName[80] = "out3.txt";
+    int n; // Size of square matrix
+    int m; // Number of non-zero items
+    int *rowPtr = nullptr;
+    int *colIdx = nullptr;
+    double *values = nullptr;
+
+    m = loadDataSparse(fileName, &X, &N);
+    int *rptrs = (int *)malloc((N + 1) * sizeof(int));
+    int *columns = (int *)malloc(m * sizeof(int));
+    double *rvals = (double *)malloc(m * sizeof(double));
+    memset(rptrs, 0, (N + 1) * sizeof(int));
+    for (int i = 0; i < m; i++)
+    {
+        int rowid = X[i].i;
+        if (rowid < 0 || rowid >= N)
+        {
+            printf("problem in X, quitting - %d\n", rowid);
+            exit(1);
+        }
+        rptrs[rowid + 1]++;
+    }
+    for (int i = 1; i <= N; i++)
+    {
+        rptrs[i] += rptrs[i - 1];
+    }
+    for (int i = 0; i < m; i++)
+    {
+        int rowid = X[i].i;
+        int index = rptrs[rowid];
+
+        columns[index] = X[i].j;
+        rvals[index] = X[i].val;
+
+        rptrs[rowid] = rptrs[rowid] + 1;
+    }
+
+    for (int i = N; i > 0; i--)
+    {
+        rptrs[i] = rptrs[i - 1];
+    }
+    rptrs[0] = 0;
+    if (rptrs[N - 1] == m)
+    {
+        printf("The result is : %lf\n", 0);
+        exit(0);
+    }
+
+    for (size_t i = 1; i < N; i++)
+    {
+        if (rptrs[i - 1] >= rptrs[i])
+        {
+            printf("The result is : %lf\n", 0);
+            exit(0);
+        }
+    }
+    int *cptrs;
+    int *rows;
+    double *cvals;
+    convertCRStoCCS(rptrs, columns, rvals, N, m, &cptrs, &rows, &cvals);
+    double trueResult = seqSpaRyserNzero(rptrs, columns, rvals, cptrs, rows, cvals);
+    printf("The result is : %lf \n", trueResult);
     return 0;
 }
