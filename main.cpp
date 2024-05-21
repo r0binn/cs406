@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -16,6 +17,66 @@ typedef struct sparseMatrix
 sparseMatrix *X;
 int N;
 int m;
+// Function to compare two pairs based on the second value (non-zero count)
+bool comparePairs(const pair<int, int> &a, const pair<int, int> &b)
+{
+    return a.second < b.second;
+}
+
+// Function to count non-zero items per column
+void countNonZeroPerColumn(int *rptrs, int *columns, int N, int m, int *colCounts)
+{
+    for (int row = 0; row < N; ++row)
+    {
+        for (int idx = rptrs[row]; idx < rptrs[row + 1]; ++idx)
+        {
+            int col = columns[idx];
+            colCounts[col]++;
+        }
+    }
+}
+
+// Function to create a mapping from old column indices to new sorted column indices
+void createColumnMapping(int *colCounts, int N, int *colMap, int *sortedCols)
+{
+    pair<int, int> *colWithCount = (pair<int, int> *)malloc(N * sizeof(pair<int, int>));
+    for (int col = 0; col < N; ++col)
+    {
+        colWithCount[col] = {col, colCounts[col]};
+    }
+
+    sort(colWithCount, colWithCount + N, comparePairs);
+
+    for (int i = 0; i < N; ++i)
+    {
+        sortedCols[i] = colWithCount[i].first;
+        colMap[colWithCount[i].first] = i;
+    }
+
+    free(colWithCount);
+}
+
+// Function to rearrange CSR arrays according to the sorted columns
+void rearrangeCSR(int *rptrs, int *columns, double *rvals, int *sortedCols, int *colMap, int *newRptrs, int *newColumns,
+                  double *newRvals, int N, int m)
+{
+    int *tempCounts = (int *)calloc(N, sizeof(int));
+
+    for (int row = 0; row < N; ++row)
+    {
+        for (int idx = rptrs[row]; idx < rptrs[row + 1]; ++idx)
+        {
+            int col = columns[idx];
+            int newCol = colMap[col];
+            newColumns[newRptrs[row] + tempCounts[row]] = newCol;
+            newRvals[newRptrs[row] + tempCounts[row]] = rvals[idx];
+            tempCounts[row]++;
+        }
+    }
+
+    free(tempCounts);
+}
+
 void convertCRStoCCS(int *rptrs, int *columns, double *rvals, int NumRows, int NumElements, int **cptrs, int **rows,
                      double **cvals)
 {
@@ -116,7 +177,7 @@ double seqSpaRyserNzero(int *rptrs, int *columns, double *rvals, int *cptrs, int
         }
     }
     double p;
-    if (nzeros <= 0)
+    if (nzeros == 0)
     {
         p = 1.0;
         for (size_t i = 0; i < N; i++)
@@ -267,7 +328,6 @@ int main(int argc, char *argv[])
         printf("The result is : %d\n", 0);
         exit(0);
     }
-
     for (size_t i = 1; i < N; i++)
     {
         if (rptrs[i - 1] >= rptrs[i])
@@ -276,22 +336,51 @@ int main(int argc, char *argv[])
             exit(0);
         }
     }
+    // Step 1: Count non-zero items per column
+    int *colCounts = (int *)calloc(N, sizeof(int));
+    countNonZeroPerColumn(rptrs, columns, N, m, colCounts);
+
+    // Step 2: Sort columns by the number of non-zero items
+    int *sortedCols = (int *)malloc(N * sizeof(int));
+    int *colMap = (int *)malloc(N * sizeof(int));
+    createColumnMapping(colCounts, N, colMap, sortedCols);
+
+    // Step 3: Rearrange CSR arrays according to the sorted columns
+    int *newRptrs = (int *)malloc((N + 1) * sizeof(int));
+    int *newColumns = (int *)malloc(m * sizeof(int));
+    double *newRvals = (double *)malloc(m * sizeof(double));
+    memset(newRptrs, 0, (N + 1) * sizeof(int));
+
+    for (int i = 0; i < N; ++i)
+    {
+        newRptrs[i + 1] = rptrs[i + 1] - rptrs[i];
+    }
+    for (int i = 1; i <= N; ++i)
+    {
+        newRptrs[i] += newRptrs[i - 1];
+    }
+
+    rearrangeCSR(rptrs, columns, rvals, sortedCols, colMap, newRptrs, newColumns, newRvals, N, m);
+
+    free(rvals);
+    free(columns);
+    free(rptrs);
+    rvals = newRvals;
+    columns = newColumns;
+    rptrs = newRptrs;
     unsigned long int maxG = (1 << (N - 1));
     int *cptrs;
     int *rows;
     double *cvals;
     convertCRStoCCS(rptrs, columns, rvals, N, m, &cptrs, &rows, &cvals);
     double startS = omp_get_wtime();
-    double trueResult = seqSpaRyserNzero(rptrs, columns, rvals, cptrs, rows, cvals);
+    double trueResult = seqSpaRyser(rptrs, columns, rvals, cptrs, rows, cvals);
     double endS = omp_get_wtime();
-    printf("Sequential result is : %.40f seconds %lf\n", trueResult, endS - startS);
+    printf("Sequential result is : %e seconds %lf\n", trueResult, endS - startS);
     omp_set_num_threads(numThreads);
     unsigned int chunksize = (1 << (N - 1));
     chunksize = floor((chunksize - 1) / numThreads);
     chunksize = (chunksize > 1) ? chunksize : 1;
-    printf("ChunkSize: %u\n", chunksize);
-
-    printf("GMax: %lu\n", maxG);
     double *X = (double *)malloc((N) * sizeof(double));
     for (size_t i = 0; i < N; i++)
     {
@@ -321,7 +410,6 @@ int main(int argc, char *argv[])
     for (unsigned long int g = 1; g < maxG; g++)
     {
         int thread_id = omp_get_thread_num();
-        printf("TID %d g %lu\n", thread_id, g);
 
         double *myX = (double *)malloc((N) * sizeof(double));
         for (size_t i = 0; i < N; i++)
@@ -374,7 +462,6 @@ int main(int argc, char *argv[])
             }
             myP += (double)(prodsign * prod);
         }
-        printf("TID %d gEnd %lu\n", thread_id, g);
         g = maxG;
         free(myX);
         p += myP;
@@ -383,7 +470,7 @@ int main(int argc, char *argv[])
     tempResult = p * (4 * (N % 2) - 2);
     double endT = omp_get_wtime();
     printf("parallel ends in %f seconds with %d threads ", endT - startT, numThreads);
-    printf("The given result is : %.40f\n", tempResult);
+    printf("The given result is : %e\n", tempResult);
     printf("Error :%lf\n", abs(trueResult - tempResult) / trueResult);
     printf("Speedup :%lf\n", (endS - startS) / (endT - startT));
     return 0;
