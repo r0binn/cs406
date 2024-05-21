@@ -189,7 +189,7 @@ double seqSpaRyserNzero(int *rptrs, int *columns, double *rvals, int *cptrs, int
     {
         p = 0.0;
     }
-    unsigned long int maxG = (1 << (N - 1));
+    unsigned long int maxG = (1ULL << (N - 1));
     for (int g = 1; g < maxG; g++)
     {
 
@@ -250,7 +250,7 @@ double seqSpaRyser(int *rptrs, int *columns, double *rvals, int *cptrs, int *row
     {
         p *= X[i];
     }
-    unsigned long int maxG = (1 << (N - 1));
+    unsigned long int maxG = (1ULL << (N - 1));
 
     for (int g = 1; g < maxG; g++)
     {
@@ -368,19 +368,22 @@ int main(int argc, char *argv[])
     rvals = newRvals;
     columns = newColumns;
     rptrs = newRptrs;
-    unsigned long int maxG = (1 << (N - 1));
+    unsigned long int maxG = (1ULL << (N - 1));
     int *cptrs;
     int *rows;
     double *cvals;
     convertCRStoCCS(rptrs, columns, rvals, N, m, &cptrs, &rows, &cvals);
     double startS = omp_get_wtime();
-    double trueResult = seqSpaRyser(rptrs, columns, rvals, cptrs, rows, cvals);
+    double trueResult = seqSpaRyserNzero(rptrs, columns, rvals, cptrs, rows, cvals);
     double endS = omp_get_wtime();
     printf("Sequential result is : %e seconds %lf\n", trueResult, endS - startS);
     omp_set_num_threads(numThreads);
-    unsigned int chunksize = (1 << (N - 1));
+    unsigned long long int chunksize = (1ULL << (N - 1));
+    printf("Chunksize %lu\n", chunksize);
+
     chunksize = floor((chunksize - 1) / numThreads);
     chunksize = (chunksize > 1) ? chunksize : 1;
+    printf("Chunksize %llu\n", chunksize);
     double *X = (double *)malloc((N) * sizeof(double));
     for (size_t i = 0; i < N; i++)
     {
@@ -407,10 +410,10 @@ int main(int argc, char *argv[])
     printf("Parallel has started\n");
     double startT = omp_get_wtime();
 #pragma omp parallel for schedule(dynamic, chunksize) reduction(+ : p) proc_bind(spread)
-    for (unsigned long int g = 1; g < maxG; g++)
+    for (unsigned long long int g = 1; g < maxG; g++)
     {
         int thread_id = omp_get_thread_num();
-
+        int nzeros = 0;
         double *myX = (double *)malloc((N) * sizeof(double));
         for (size_t i = 0; i < N; i++)
         {
@@ -438,6 +441,13 @@ int main(int argc, char *argv[])
                 colIdx += 1;
             }
         }
+        for (size_t i = 0; i < N; i++)
+        {
+            if (myX[i] == 0)
+            {
+                nzeros += 1;
+            }
+        }
         unsigned long long int myEnd = g + chunksize;
         myEnd = (myEnd < maxG) ? myEnd : maxG;
         for (; g < myEnd; g++)
@@ -453,16 +463,26 @@ int main(int argc, char *argv[])
             {
                 int row = rows[ptr];
                 double val = cvals[ptr];
+                if (myX[row] == 0)
+                {
+                    nzeros -= 1;
+                }
                 myX[row] = myX[row] + (s * val);
+                if (myX[row] == 0)
+                {
+                    nzeros += 1;
+                }
             }
-            double prod = 1.0;
-            for (size_t i = 0; i < N; i++)
+            if (nzeros == 0)
             {
-                prod *= myX[i];
+                double prod = 1.0;
+                for (size_t i = 0; i < N; i++)
+                {
+                    prod *= myX[i];
+                }
+                myP += (double)(prodsign * prod);
             }
-            myP += (double)(prodsign * prod);
         }
-        g = maxG;
         free(myX);
         p += myP;
     }
